@@ -1,12 +1,12 @@
 # Intentionally vulnerable Dockerfile for Wiz CLI demo
 # DO NOT USE IN PRODUCTION
 
-# VULN: Old Python + Debian Buster (EOL, lots of CVEs)
-FROM python:3.8-buster
+# VULN: Old Python + Debian Bullseye (many CVEs)
+FROM python:3.9-bullseye
 
 LABEL maintainer="demo@example.com"
 
-# VULN: Outdated OS packages (many CVEs in Buster)
+# VULN: Outdated OS packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -22,7 +22,7 @@ ENV DB_PASSWORD="SuperSecret123!"
 
 WORKDIR /app
 
-# VULN: Vulnerable Python dependencies (from requirements.txt)
+# VULN: Vulnerable Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
