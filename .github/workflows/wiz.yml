@@ -21,7 +21,7 @@ jobs:
 
       - name: Download Wiz CLI
         run: |
-          curl -o wizcli https://wizcli.app.wiz.io/latest/wizcli-linux-amd64
+          curl -o wizcli https://downloads.wiz.io/v1/wizcli/latest/wizcli-linux-amd64
           chmod +x wizcli
           sudo mv wizcli /usr/local/bin/wizcli
           wizcli version
