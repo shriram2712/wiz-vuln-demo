@@ -12,7 +12,7 @@ console = Console(force_terminal=True)
 WIZ_CLIENT_ID = os.getenv("WIZ_CLIENT_ID")
 WIZ_CLIENT_SECRET = os.getenv("WIZ_CLIENT_SECRET")
 WIZ_API_URL = os.getenv("WIZ_API_URL", "https://api.us1.app.wiz.io/graphql")
-WIZ_AUTH_URL = "https://auth.wiz.io/oauth/token"
+WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token"
 
 def get_wiz_token():
     payload = {
