@@ -163,7 +163,54 @@ def get_severity_for_result(result, rule_map):
         return SARIF_LEVEL_TO_SEVERITY[level], fields
 
     return "UNKNOWN", fields
+def rewrite_alert_titles(sarif, scan_label):
+    """
+    Rewrite result.message.text so the GitHub Code Scanning alert title
+    shows our custom format:
+        [Wiz CLI Scan] <CVE/Rule> : <Component> <ver> → <fix> : <custom message>
+    """
+    rule_map = get_rule_map(sarif)
 
+    for run in sarif.get("runs", []):
+        for result in run.get("results", []):
+            rule_id = result.get("ruleId", "UNKNOWN")
+            severity, fields = get_severity_for_result(result, rule_map)
+
+            component = fields.get("component", "")
+            version = fields.get("version", "")
+            fixed = fields.get("fixed version", "")
+
+            # Build the custom message based on scan type
+            if scan_label == "SCA" or scan_label == "Image":
+                parts = [f"[Wiz CLI Scan] {rule_id}"]
+                if component and version:
+                    ver_info = f"{component} {version}"
+                    if fixed and fixed.lower() not in ("n/a", ""):
+                        ver_info += f" → fix: {fixed}"
+                    parts.append(ver_info)
+                parts.append(f"{severity} vulnerability detected")
+                new_title = " : ".join(parts)
+
+            elif scan_label == "IaC":
+                rule = rule_map.get(rule_id, {}) or {}
+                rule_name = rule.get("name") or ""
+                rule_short = (rule.get("shortDescription") or {}).get("text", "")
+                desc = rule_short or rule_name or "Misconfiguration detected"
+                new_title = f"[Wiz CLI Scan] {rule_name or rule_id} : {desc} : {severity}"
+
+            else:
+                new_title = f"[Wiz CLI Scan] {rule_id}"
+
+            # Preserve the original detailed description, just prepend our title
+            original_text = (result.get("message") or {}).get("text", "")
+            original_md = (result.get("message") or {}).get("markdown", "")
+
+            result["message"] = {
+                "text": f"{new_title}\n\n{original_text}",
+                "markdown": f"### {new_title}\n\n{original_md or original_text}",
+            }
+
+    return sarif
 
 def enrich_sarif_with_severity(sarif):
     """Add security-severity to each rule so GitHub shows proper severity badges."""
@@ -540,6 +587,10 @@ def main():
 
             # Enrich SARIF so GitHub shows proper Critical/High/Medium badges
             sarif = enrich_sarif_with_severity(sarif)
+
+            # Rewrite alert titles to [Wiz CLI Scan] CVE : component : message format
+            scan_label = "SCA" if "dir" in path else ("IaC" if "dockerfile" in path else "Image")
+            sarif = rewrite_alert_titles(sarif, scan_label)
 
             # Write the enriched SARIF back so the upload step picks it up
             with open(path, "w") as f:
