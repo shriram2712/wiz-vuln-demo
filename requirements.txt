@@ -10,4 +10,3 @@ cryptography==2.3
 Pillow==6.2.0
 paramiko==2.4.1
 Werkzeug==0.15.0
-
