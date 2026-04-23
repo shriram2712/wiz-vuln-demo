@@ -65,6 +65,57 @@ SARIF_FILES = [
     ("Container Image",                    "image.sarif"),
 ]
 
+def cap_results(sarif, max_results=2000):
+    """
+    Aggressively trim large SARIFs so GitHub can successfully process them.
+
+    GitHub's docs say 25k max, but in practice large image SARIFs (>3000 results)
+    often fail during backend processing even though upload succeeds.
+    Keep highest-severity findings and drop unused rules to shrink the file.
+    """
+    severity_priority = {"error": 0, "warning": 1, "note": 2, "none": 3}
+
+    total_kept = 0
+    kept_rule_ids = set()
+
+    for run in sarif.get("runs", []):
+        results = run.get("results", []) or []
+        if not results:
+            continue
+
+        # Sort so highest-severity findings are kept
+        results.sort(key=lambda r: severity_priority.get(
+            (r.get("level") or "warning").lower(), 9
+        ))
+
+        remaining_budget = max(0, max_results - total_kept)
+        if len(results) > remaining_budget:
+            run["results"] = results[:remaining_budget]
+        total_kept += len(run["results"])
+
+        # Collect rule IDs actually used by the kept results
+        for r in run["results"]:
+            rid = r.get("ruleId")
+            if rid:
+                kept_rule_ids.add(rid)
+
+        # Drop unused rules — they bloat the file by 20-40%
+        tool_driver = run.get("tool", {}).get("driver", {})
+        all_rules = tool_driver.get("rules", []) or []
+        kept_rules = [r for r in all_rules if r.get("id") in kept_rule_ids]
+        tool_driver["rules"] = kept_rules
+
+        # Recalculate ruleIndex on each result to match the new rules array
+        rule_id_to_index = {r.get("id"): i for i, r in enumerate(kept_rules)}
+        for result in run["results"]:
+            rid = result.get("ruleId")
+            if rid and rid in rule_id_to_index:
+                result["ruleIndex"] = rule_id_to_index[rid]
+            else:
+                # Rule reference broken — remove the orphan ruleIndex
+                result.pop("ruleIndex", None)
+
+    return sarif
 
 def parse_message_text(text):
     """Parse 'Key: value' lines from Wiz's SARIF message text."""
@@ -585,17 +636,32 @@ def main():
             with open(path) as f:
                 sarif = json.load(f)
 
-            # Enrich SARIF so GitHub shows proper Critical/High/Medium badges
+            # 1. Enrich: add security-severity to each rule
             sarif = enrich_sarif_with_severity(sarif)
 
-            # Rewrite alert titles to [Wiz CLI Scan] CVE : component : message format
-            scan_label = "SCA" if "dir" in path else ("IaC" if "dockerfile" in path else "Image")
+            # 2. Rewrite titles: [Wiz CLI Scan] CVE : component : severity
+            scan_label = "SCA" if "dir" in path else (
+                "IaC" if "dockerfile" in path else "Image"
+            )
             sarif = rewrite_alert_titles(sarif, scan_label)
 
-            # Write the enriched SARIF back so the upload step picks it up
-            with open(path, "w") as f:
-                json.dump(sarif, f, indent=2)
+            # 3. Cap results LAST so ruleIndex gets recomputed correctly
+            if "image" in path.lower():
+                sarif = cap_results(sarif, max_results=2000)
+            else:
+                sarif = cap_results(sarif, max_results=25000)
 
+            # Save compact SARIF for upload
+            with open(path, "w") as f:
+                json.dump(sarif, f, separators=(",", ":"))
+
+            size_kb = os.path.getsize(path) / 1024
+            result_count = sum(
+                len(run.get("results", [])) for run in sarif.get("runs", [])
+            )
+            print(f"  Saved {path}: {size_kb:.1f} KB, {result_count} results")
+
+            # Extract rows from the enriched (in-memory) SARIF for printing
             rows = extract_rows(sarif)
 
             # Dedupe
@@ -607,7 +673,6 @@ def main():
                     seen.add(key)
                     deduped.append(r)
 
-            # Keep only top 3 for a clean demo console table
             rows = deduped[:3]
 
             counts = print_report(title, rows)
@@ -624,7 +689,6 @@ def main():
         print_layer_report("image-layers.json")
     except Exception as e:
         print(f"\n(Per-layer report outer failure: {e})")
-
 
 if __name__ == "__main__":
     main()
