@@ -1,5 +1,5 @@
 # Intentionally vulnerable Dockerfile for Wiz CLI demo
-# DO NOT USE IN PRODUCTION
+# DO NOT USE IN PRODUCTION.
 
 # VULN: Old Python + Bullseye base (many CVEs in base layer)
 FROM python:3.9-bullseye
