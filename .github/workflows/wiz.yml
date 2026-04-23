@@ -181,6 +181,20 @@ jobs:
           print(f'Version: {s.get(\"version\", \"none\")}')
           "
           echo "::endgroup::"
+      - name: Deep SARIF diagnostic
+        if: always() && hashFiles('image.sarif') != ''
+        run: |
+          echo "::group::🔬 Deep SARIF diagnostic"
+          python .github/workflows/diagnose_sarif.py image.sarif
+          echo "::endgroup::"
+      
+      - name: Upload diagnostic sample artifact
+        if: always() && hashFiles('sarif_sample_results.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarif-sample-results
+          path: sarif_sample_results.json
+          retention-days: 7
 
       # === Upload enriched SARIFs to GitHub Security tab ===
       - name: Upload SCA SARIF
