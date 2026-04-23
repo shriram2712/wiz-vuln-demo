@@ -1,5 +1,9 @@
 name: Wiz Enriched Scan
-on: [push]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   wiz-scan:
@@ -8,6 +12,7 @@ jobs:
       security-events: write
       contents: read
       actions: read
+      pull-requests: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -18,7 +23,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install requests tabulate
+        run: pip install tabulate
 
       - name: Download Wiz CLI
         run: |
@@ -33,60 +38,69 @@ jobs:
           WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
         run: wizcli auth --id "$WIZ_CLIENT_ID" --secret "$WIZ_CLIENT_SECRET"
 
-      # === 1. Scan source dependencies (existing behavior) ===
+      # === SCA: source dependency scan ===
       - name: Wiz Directory Scan (SCA)
         run: |
           wizcli dir scan --path . \
-            --format sarif \
-            --output dir.sarif,sarif,vulnerabilities
+            --output dir.sarif,sarif,vulnerabilities \
+            --output dir.txt,human,vulnerabilities
+          echo "=== SCA Scan Output ==="
+          cat dir.txt || true
         continue-on-error: true
 
-      # === 2. Scan the Dockerfile itself (IaC misconfigs) ===
+      # === IaC: Dockerfile misconfiguration scan ===
       - name: Wiz Dockerfile Scan (IaC)
         run: |
           wizcli iac scan --path ./Dockerfile \
-            --format sarif \
-            --output dockerfile.sarif,sarif,misconfigurations
+            --output dockerfile.sarif,sarif,misconfigurations \
+            --output dockerfile.txt,human,misconfigurations
+          echo "=== IaC Scan Output ==="
+          cat dockerfile.txt || true
         continue-on-error: true
 
-      # === 3. Build and scan the container image ===
+      # === Container image scan ===
       - name: Build Docker Image
-        run: docker build -t ${{ github.repository }}:${{ github.sha }} .
+        run: docker build -t wiz-vuln-demo:${{ github.sha }} .
+        continue-on-error: true
 
       - name: Wiz Container Image Scan
+        if: success()
         run: |
           wizcli docker scan \
-            --image ${{ github.repository }}:${{ github.sha }} \
-            --format sarif \
-            --output image.sarif,sarif,vulnerabilities
+            --image wiz-vuln-demo:${{ github.sha }} \
+            --output image.sarif,sarif,vulnerabilities \
+            --output image.txt,human,vulnerabilities
+          echo "=== Image Scan Output ==="
+          cat image.txt || true
         continue-on-error: true
 
-      # === 4. Enrich and display all three ===
+      # === Enrich SARIF + print demo table ===
       - name: Enrich and Display Reports
+        if: always()
         env:
           WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
           WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
           WIZ_API_URL: "https://api.us1.app.wiz.io/graphql"
         run: python .github/workflows/wizsarif.py
 
-      # === 5. Upload each SARIF to GitHub Security tab ===
-      - name: Upload Dir Scan SARIF
+      # === Upload enriched SARIFs to GitHub Security tab ===
+      - name: Upload SCA SARIF
+        if: always() && hashFiles('dir.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: dir.sarif
           category: wiz-sca
 
-      - name: Upload Dockerfile Scan SARIF
+      - name: Upload IaC SARIF
+        if: always() && hashFiles('dockerfile.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: dockerfile.sarif
           category: wiz-iac
 
-      - name: Upload Image Scan SARIF
+      - name: Upload Image SARIF
+        if: always() && hashFiles('image.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: image.sarif
           category: wiz-image
