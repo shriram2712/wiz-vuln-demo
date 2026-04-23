@@ -218,6 +218,71 @@ def rewrite_alert_titles(sarif, scan_label):
     return sarif
 
 
+# ========================================================================
+# FIX #5 (THE REAL FIX): Normalize image SARIF locations to a repo-relative
+# path. GitHub Code Scanning rejects SARIFs where artifactLocation.uri
+# points to container image references like "docker.io/library/foo:sha256..."
+# because it expects URIs to resolve to files in the repository.
+#
+# Convention used by Trivy/Grype/Snyk: map all container findings to
+# "Dockerfile" (or whatever built the image), preserving the original
+# image URI inside properties.imageRef for traceability.
+# ========================================================================
+def normalize_image_locations(sarif, target_path="Dockerfile"):
+    """
+    Rewrite all artifactLocation.uri values in container image SARIFs so
+    GitHub's backend can map them to a real repo file. The original image
+    reference is preserved in result.properties.imageRef.
+    """
+    for run in sarif.get("runs", []):
+        # Set originalUriBaseIds so GitHub knows the URIs are repo-relative
+        run.setdefault("originalUriBaseIds", {})
+        run["originalUriBaseIds"]["SRCROOT"] = {
+            "uri": "file:///",
+            "description": {"text": "Repository root"},
+        }
+
+        for result in run.get("results", []):
+            locations = result.get("locations") or []
+            if not locations:
+                # Every result MUST have at least one location for GitHub
+                result["locations"] = [{
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": target_path,
+                            "uriBaseId": "SRCROOT",
+                        },
+                        "region": {"startLine": 1},
+                    }
+                }]
+                continue
+
+            for loc in locations:
+                phys = loc.setdefault("physicalLocation", {})
+                art = phys.setdefault("artifactLocation", {})
+                original_uri = art.get("uri", "")
+
+                # Save original image reference for reference
+                if original_uri and (
+                    original_uri.startswith("docker.io/")
+                    or ":sha256:" in original_uri
+                    or "@sha256:" in original_uri
+                    or "/" in original_uri and ":" in original_uri
+                ):
+                    props = result.setdefault("properties", {})
+                    props["imageRef"] = original_uri
+
+                # Rewrite to repo-relative path
+                art["uri"] = target_path
+                art["uriBaseId"] = "SRCROOT"
+
+                # Ensure region exists — GitHub requires it
+                if "region" not in phys:
+                    phys["region"] = {"startLine": 1}
+
+    return sarif
+
+
 def enrich_sarif_with_severity(sarif):
     rule_map = get_rule_map(sarif)
     rule_severity = {}
@@ -677,22 +742,28 @@ def main():
             # 1. Ensure tool metadata (fixes "version: unknown" warning)
             sarif = ensure_tool_metadata(sarif)
 
-            # 2. Enrich: add security-severity to each rule
+            # 2. Normalize image locations (THE FIX for wiz-image failure)
+            # GitHub rejects SARIFs whose artifactLocation.uri points to
+            # docker image references instead of repo-relative paths.
+            if "image" in path.lower():
+                sarif = normalize_image_locations(sarif, target_path="Dockerfile")
+
+            # 3. Enrich: add security-severity to each rule
             sarif = enrich_sarif_with_severity(sarif)
 
-            # 3. Rewrite titles (markdown-only — text preserved)
+            # 4. Rewrite titles (markdown-only — text preserved)
             scan_label = "SCA" if "dir" in path else (
                 "IaC" if "dockerfile" in path else "Image"
             )
             sarif = rewrite_alert_titles(sarif, scan_label)
 
-            # 4. Cap results with strict rule-result consistency
+            # 5. Cap results with strict rule-result consistency
             if "image" in path.lower():
                 sarif = cap_results(sarif, max_results=1000)
             else:
                 sarif = cap_results(sarif, max_results=5000)
 
-            # 5. Validate before writing
+            # 6. Validate before writing
             validate_sarif(sarif, path)
 
             with open(path, "w") as f:
