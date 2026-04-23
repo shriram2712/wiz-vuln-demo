@@ -6,11 +6,11 @@ from tabulate import tabulate
 
 # ANSI color codes for terminal output
 ANSI = {
-    "CRITICAL": "\033[1;37;41m",   # white on red, bold
-    "HIGH":     "\033[1;31m",       # bright red
-    "MEDIUM":   "\033[1;33m",       # yellow
-    "LOW":      "\033[1;32m",       # green
-    "INFORMATIONAL": "\033[1;90m",  # grey
+    "CRITICAL": "\033[1;37;41m",
+    "HIGH":     "\033[1;31m",
+    "MEDIUM":   "\033[1;33m",
+    "LOW":      "\033[1;32m",
+    "INFORMATIONAL": "\033[1;90m",
     "UNKNOWN":  "\033[0m",
     "RESET":    "\033[0m",
 }
@@ -30,7 +30,27 @@ SEVERITY_ORDER = {
     "INFORMATIONAL": 4, "UNKNOWN": 5,
 }
 
-# SARIF files produced by the scan steps in the workflow
+# CVSS-style numeric severity GitHub uses for proper severity badges
+# (https://docs.github.com/en/code-security/code-scanning/integrating-with-code-scanning/sarif-support-for-code-scanning#reportingdescriptor-object)
+SECURITY_SEVERITY = {
+    "CRITICAL": "9.5",
+    "HIGH":     "8.0",
+    "MEDIUM":   "5.5",
+    "LOW":      "3.0",
+    "INFORMATIONAL": "0.5",
+    "UNKNOWN":  "0.0",
+}
+
+# Map our severity to SARIF level (what GitHub displays as Error/Warning/Note)
+LEVEL_MAP = {
+    "CRITICAL": "error",
+    "HIGH":     "error",
+    "MEDIUM":   "warning",
+    "LOW":      "note",
+    "INFORMATIONAL": "note",
+    "UNKNOWN":  "note",
+}
+
 SARIF_FILES = [
     ("Source Dependencies (SCA)",          "dir.sarif"),
     ("Dockerfile Misconfigurations (IaC)", "dockerfile.sarif"),
@@ -61,6 +81,40 @@ def wrap(text, width):
     return "\n".join(textwrap.wrap(str(text), width=width)) or str(text)
 
 
+def enrich_sarif_with_severity(sarif):
+    """Add security-severity to each rule so GitHub shows proper severity badges."""
+    # First, build a map of ruleId -> severity by scanning results
+    rule_severity = {}
+    for run in sarif.get("runs", []):
+        for result in run.get("results", []):
+            rid = result.get("ruleId")
+            msg_text = (result.get("message") or {}).get("text", "")
+            fields = parse_message_text(msg_text)
+            sev = fields.get("severity", "").upper() or "UNKNOWN"
+            if rid and sev:
+                rule_severity[rid] = sev
+
+            # Also update the result level to match
+            result["level"] = LEVEL_MAP.get(sev, "warning")
+
+    # Then, enrich each rule definition
+    for run in sarif.get("runs", []):
+        tool = run.get("tool", {}).get("driver", {})
+        rules = tool.get("rules", []) or []
+        for rule in rules:
+            rid = rule.get("id")
+            sev = rule_severity.get(rid, "UNKNOWN")
+            props = rule.setdefault("properties", {})
+            props["security-severity"] = SECURITY_SEVERITY[sev]
+            # Tags help GitHub filtering
+            tags = props.setdefault("tags", [])
+            if "security" not in tags:
+                tags.append("security")
+            if sev.lower() not in tags:
+                tags.append(sev.lower())
+    return sarif
+
+
 def extract_rows(sarif):
     rows = []
     for run in sarif.get("runs", []):
@@ -69,11 +123,7 @@ def extract_rows(sarif):
             msg_text = (result.get("message") or {}).get("text", "")
             fields = parse_message_text(msg_text)
 
-            severity = (
-                fields.get("severity", "").upper()
-                or (result.get("level") or "").upper()
-                or "UNKNOWN"
-            )
+            severity = fields.get("severity", "").upper() or "UNKNOWN"
             component = fields.get("component", "N/A")
             version = fields.get("version", "N/A")
             fixed = fields.get("fixed version", "N/A")
@@ -164,7 +214,7 @@ def write_summary(title, rows, counts):
 
     with open(summary_path, "a") as f:
         f.write(f"\n## {title}\n\n")
-        f.write(f"**Total findings:** {len(rows)}\n\n")
+        f.write(f"**Total findings shown:** {len(rows)}\n\n")
         if counts:
             f.write("**Breakdown:** " + " | ".join(
                 f"{EMOJI[s]} {s}: {counts[s]}"
@@ -182,8 +232,16 @@ def main():
             print(f"Skipping {title}: {path} not found")
             continue
         any_found = True
+
         with open(path) as f:
             sarif = json.load(f)
+
+        # Enrich SARIF so GitHub shows proper Critical/High/Medium badges
+        sarif = enrich_sarif_with_severity(sarif)
+
+        # Write the enriched SARIF back so the upload step picks it up
+        with open(path, "w") as f:
+            json.dump(sarif, f, indent=2)
 
         rows = extract_rows(sarif)
 
@@ -196,7 +254,8 @@ def main():
                 seen.add(key)
                 deduped.append(r)
 
-        # Keep only top 3 (already sorted by severity)
+        # Keep only top 3 for a clean demo console table
+        # (Full SARIF still uploads to GitHub Security tab)
         rows = deduped[:3]
 
         counts = print_report(title, rows)
