@@ -502,19 +502,17 @@ def main():
 
             counts = print_report(title, rows)
             write_summary(title, rows, counts)
+             # Per-layer image report — wrapped in try/except so it never crashes
+            try:
+                print_layer_report("image-layers.json")
+            except Exception as e:
+                print(f"\n(Per-layer report outer failure: {e})")
         except Exception as e:
             print(f"\n(Error processing {title}: {e})")
             print(traceback.format_exc())
 
     if not any_found:
         print("No SARIF files found. Did the scan steps run?")
-
-    # Per-layer image report — wrapped in try/except so it never crashes
-    try:
-        print_layer_report("image-layers.json")
-    except Exception as e:
-        print(f"\n(Per-layer report outer failure: {e})")
-
 
 if __name__ == "__main__":
     main()
