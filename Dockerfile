@@ -2,6 +2,8 @@
 # python:3.9-alpine is small but has guaranteed known CVEs in old Python + alpine
 FROM python:3.12-alpine
 
+RUN pip3 install django==1.9.0
+
 CMD ["python", "-c", "print('wiz-vuln-demo minimal')"]
 # FROM registry.os.wiz.io/python:3.10
 
