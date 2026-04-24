@@ -8,6 +8,8 @@ on:
 env:
   COLUMNS: "250"
   TERM: xterm-256color
+  ACTIONS_RUNNER_DEBUG: true
+  ACTIONS_STEP_DEBUG: true
 
 jobs:
   wiz-scan:
