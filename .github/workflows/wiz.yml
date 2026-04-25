@@ -81,12 +81,14 @@ jobs:
         continue-on-error: true
 
       # === Container image scan for SARIF (default driver — reliable upload) ===
+      # Now also includes --policies flag to apply customer's CI/CD policy
       - name: Wiz Container Image Scan (SARIF)
         if: success()
         run: |
           echo "::group::🔍 Wiz Container Image Scan (for SARIF upload)"
           wizcli docker scan \
             --image wiz-vuln-demo:${{ github.sha }} \
+            --policies "Zee-Container-Security" \
             --output image.sarif,sarif,vulnerabilities \
             --output image.txt,human,vulnerabilities || true
           echo "::endgroup::"
@@ -97,6 +99,7 @@ jobs:
         continue-on-error: true
 
       # === Container image scan for per-layer JSON (mountWithLayers needs root) ===
+      # WITH --policies flag for the customer's policy (Zee-Container-Security)
       - name: Wiz Container Image Scan (per-layer JSON)
         if: success()
         env:
@@ -107,11 +110,17 @@ jobs:
           sudo -E $(which wizcli) auth --id "$WIZ_CLIENT_ID" --secret "$WIZ_CLIENT_SECRET"
           echo "::endgroup::"
 
-          echo "::group::🔍 Wiz Container Image Scan - Per Layer (JSON only)"
+          echo "::group::🔍 Wiz Container Image Scan - Per Layer (JSON only) WITH POLICY"
           sudo -E $(which wizcli) docker scan \
             --image wiz-vuln-demo:${{ github.sha }} \
             --driver mountWithLayers \
-            --output image-layers.json,json,vulnerabilities || true
+            --policies "Zee-Container-Security" \
+            --output image-layers.json,json,vulnerabilities \
+            --output image-layers-policy.txt,human,vulnerabilities || true
+          echo "::endgroup::"
+
+          echo "::group::📋 Policy-applied scan output (human format, first 100 lines)"
+          cat image-layers-policy.txt 2>/dev/null | head -100 || echo "no human output"
           echo "::endgroup::"
         continue-on-error: true
 
@@ -154,6 +163,26 @@ jobs:
           " 2>/dev/null || echo "python inspect failed"
           echo "::endgroup::"
 
+      # === NEW: Findings analyzer (Wiz vs Prisma comparison) ===
+      - name: Analyze findings (Wiz vs Prisma)
+        if: always() && hashFiles('image-layers.json') != ''
+        run: |
+          echo "::group::📊 Findings Breakdown Analysis"
+          python .github/workflows/analyze_findings.py
+          echo "::endgroup::"
+
+      # === NEW: Upload analysis artifact for download ===
+      - name: Upload analysis artifact
+        if: always() && hashFiles('findings_analysis.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings-analysis
+          path: |
+            findings_analysis.json
+            image-layers.json
+            image-layers-policy.txt
+          retention-days: 7
+
       # === Enrich SARIF + print clean summary table + per-layer report ===
       - name: Enrich and Display Summary
         if: always()
@@ -183,13 +212,14 @@ jobs:
           print(f'Version: {s.get(\"version\", \"none\")}')
           "
           echo "::endgroup::"
+
       - name: Deep SARIF diagnostic
         if: always() && hashFiles('image.sarif') != ''
         run: |
           echo "::group::🔬 Deep SARIF diagnostic"
           python .github/workflows/diagnose_sarif.py image.sarif
           echo "::endgroup::"
-      
+
       - name: Upload diagnostic sample artifact
         if: always() && hashFiles('sarif_sample_results.json') != ''
         uses: actions/upload-artifact@v4
