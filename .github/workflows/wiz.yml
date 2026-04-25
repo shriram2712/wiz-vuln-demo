@@ -182,7 +182,21 @@ jobs:
             image-layers.json
             image-layers-policy.txt
           retention-days: 7
+      # === DRY RUN: Validate filter logic before deploying ===
+      - name: Dry-run policy filter validation
+        if: always() && hashFiles('image-layers.json') != '' && hashFiles('image.sarif') != ''
+        run: |
+          echo "::group::🧪 Dry-Run Filter Validation"
+          python .github/workflows/dryrun_filter.py
+          echo "::endgroup::"
 
+      - name: Upload dry-run diagnostic
+        if: always() && hashFiles('filter_dryrun.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: filter-dryrun
+          path: filter_dryrun.json
+          retention-days: 7
       # === Enrich SARIF + print clean summary table + per-layer report ===
       - name: Enrich and Display Summary
         if: always()
